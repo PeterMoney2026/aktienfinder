@@ -1,0 +1,4 @@
+ticker,target_date,analyst,price_target,currency,company,country,isin,sector
+AAPL,2026-10-20,Beispielhaus A,250,USD,Apple Inc.,United States,US0378331005,Technology
+AAPL,2026-10-15,Beispielhaus B,245,USD,Apple Inc.,United States,US0378331005,Technology
+AAPL,2026-10-10,Beispielhaus C,260,USD,Apple Inc.,United States,US0378331005,Technology
