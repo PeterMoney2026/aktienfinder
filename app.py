@@ -31,8 +31,16 @@ with st.sidebar:
                               value=DEFAULTS["max_target_age_days"], step=1)
     st.divider()
     st.subheader("Datenquellen")
-    tw_key = st.text_input("TargetWatch API-Key (optional)", type="password",
-                           help="Kostenloser Zugang laut Anbieter; API-Key wird nur für diese Sitzung verwendet.")
+    try:
+        configured_key = st.secrets.get("TARGETWATCH_API_KEY", "")
+    except Exception:
+        configured_key = ""
+    tw_key = configured_key or st.text_input(
+        "TargetWatch API-Key (optional)", type="password",
+        help="Für dauerhafte Nutzung in Streamlit unter App settings → Secrets als TARGETWATCH_API_KEY hinterlegen."
+    )
+    if configured_key:
+        st.caption("TargetWatch API-Key wurde sicher aus Streamlit Secrets geladen.")
     st.caption("Yahoo Finance wird für Kurs, Marktkapitalisierung und Stammdaten genutzt. Kursziele kommen aus TargetWatch oder einer eigenen CSV-Datei.")
 
 st.info(
@@ -69,6 +77,7 @@ def parse_csv(file):
     df["currency"] = df["currency"].astype(str).str.upper().str.strip()
     return df.dropna(subset=["target_date", "price_target"])
 
+@st.cache_data(ttl=21600, show_spinner=False)
 def fetch_targetwatch(ticker, key):
     url = f"https://www.targetwatch.io/api/v2/stocks/{requests.utils.quote(ticker, safe='')}/targets"
     r = requests.get(url, headers={"Authorization": f"Bearer {key}"}, timeout=20)
@@ -88,7 +97,7 @@ def fetch_targetwatch(ticker, key):
             "company": payload.get("stock"),
             "country": None,
             "isin": None,
-            "source": "TargetWatch",
+            "source": "TargetWatch (Analystenhaus)",
         })
     return rows, payload
 
@@ -99,6 +108,17 @@ def fetch_yahoo(ticker):
     price = info.get("currentPrice") or info.get("regularMarketPrice") or fast.get("lastPrice")
     currency = info.get("currency") or ""
     market_cap = info.get("marketCap")
+    market_cap_usd = None
+    if market_cap is not None and currency:
+        if currency.upper() == "USD":
+            market_cap_usd = float(market_cap)
+        else:
+            try:
+                fx_rate = yf.Ticker(f"{currency.upper()}USD=X").fast_info.get("lastPrice")
+                if fx_rate is not None:
+                    market_cap_usd = float(market_cap) * float(fx_rate)
+            except Exception:
+                market_cap_usd = None
     return {
         "company": info.get("longName") or info.get("shortName") or ticker,
         "price": float(price) if price is not None else None,
@@ -197,7 +217,7 @@ def analyze(target_rows):
             "Median Kursziel": median_target,
             "Potenzial %": upside,
             "Marktkapitalisierung USD": q.get("market_cap_usd"),
-            "Analysten-Kursziele": n,
+            "Kurszielgeber / Analystenhäuser": n,
             "Neuestes Kursziel": newest.strftime("%Y-%m-%d") if pd.notna(newest) else "",
             "Alter Tage": age,
             "Kurszielquelle": ", ".join(sorted(set(group.get("source", pd.Series(["CSV-Import"])).dropna()))),
@@ -240,7 +260,7 @@ if "results" in st.session_state:
             view = view[view["Land"].isin(chosen_countries)]
         if chosen_sectors:
             view = view[view["Branche"].isin(chosen_sectors)]
-        sort_by = st.selectbox("Sortieren nach", ["Potenzial %", "Marktkapitalisierung USD", "Analysten-Kursziele", "Unternehmen"])
+        sort_by = st.selectbox("Sortieren nach", ["Potenzial %", "Marktkapitalisierung USD", "Kurszielgeber / Analystenhäuser", "Unternehmen"])
         view = view.sort_values(sort_by, ascending=False, na_position="last")
         st.dataframe(view, use_container_width=True, hide_index=True)
         output = io.BytesIO()
@@ -256,7 +276,7 @@ if "results" in st.session_state:
             st.write({
                 "Mindestpotenzial (%)": min_upside,
                 "Mindest-Marktkapitalisierung (USD)": min_cap * 1_000_000,
-                "Mindestanzahl eindeutiger Analystenhäuser": min_analysts,
+                "Mindestanzahl eindeutiger Kurszielgeber": min_analysts,
                 "Maximales Kurszielalter (Tage)": max_age,
                 "Kurszielmethode": "Durchschnitt und Median; Potenzial anhand des Durchschnitts",
             })
