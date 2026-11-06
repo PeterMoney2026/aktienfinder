@@ -16,7 +16,7 @@ DEFAULTS = {
     "max_target_age_days": 90,
 }
 
-st.title("📈 Aktienfinder – Version 1")
+st.title("📈 Aktienfinder – Version 2")
 st.caption("Manuelles Aktien-Screening auf Basis kostenloser Datenquellen")
 
 with st.sidebar:
@@ -25,7 +25,7 @@ with st.sidebar:
                                  value=DEFAULTS["min_upside"], step=1.0)
     min_cap = st.number_input("Mindest-Marktkapitalisierung (Mio. USD)", min_value=0.0,
                               value=DEFAULTS["min_market_cap_musd"], step=10.0)
-    min_analysts = st.number_input("Mindestens Analysten-Kursziele", min_value=1, max_value=100,
+    min_analysts = st.number_input("Mindestens eindeutige Kurszielgeber", min_value=1, max_value=100,
                                    value=DEFAULTS["min_analysts"], step=1)
     max_age = st.number_input("Maximales Alter der Kursziele (Tage)", min_value=1, max_value=730,
                               value=DEFAULTS["max_target_age_days"], step=1)
@@ -62,7 +62,7 @@ with right:
     uploaded = st.file_uploader("Oder CSV mit Aktien/Kurszielen hochladen", type=["csv"])
 
 st.markdown("**CSV-Spalten für Kursziel-Daten:** `ticker`, `target_date`, `analyst`, `price_target`, `currency`.")
-st.caption("Optional zusätzlich: `isin`, `company`, `country`, `sector`. Jede Zeile entspricht einem Analysten-Kursziel.")
+st.caption("Optional zusätzlich: `isin`, `company`, `country`, `sector`. Jede Zeile entspricht einem Kursziel eines Analysten oder Analystenhauses; die Quelle bestimmt die verfügbare Granularität.")
 
 def parse_csv(file):
     df = pd.read_csv(file)
@@ -242,7 +242,7 @@ if "results" in st.session_state:
     st.subheader("2. Ergebnisse")
     st.caption(f"Letzter Suchlauf: {st.session_state.get('run_time', '–')}")
     if df.empty:
-        st.warning("Keine auswertbaren Kursziel-Datensätze gefunden. Bitte Ticker plus TargetWatch-Key oder eine CSV mit Einzelanalysten-Kurszielen bereitstellen.")
+        st.warning("Keine auswertbaren Kursziel-Datensätze gefunden. Bitte Ticker plus TargetWatch-Key oder eine CSV mit einzelnen Kurszielgebern bereitstellen.")
     else:
         eligible = df[df["Qualifiziert"] == "Ja"].copy()
         c1, c2, c3 = st.columns(3)
@@ -289,4 +289,4 @@ if "results" in st.session_state:
             )
 
 st.divider()
-st.caption("Aktienfinder V1 · Daten können verzögert, unvollständig oder fehlerhaft sein. Keine Anlageberatung.")
+st.caption("Aktienfinder V2 · Daten können verzögert, unvollständig oder fehlerhaft sein. Keine Anlageberatung.")
