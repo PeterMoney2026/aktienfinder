@@ -195,10 +195,13 @@ def fetch_yahoo_data(ticker):
 
 def build_results(ticker_list):
     results = []
-    progress = st.progress(0, text="Rufe Yahoo-Konsens und Stammdaten ab …")
+    progress = st.progress(0, text="Rufe Yahoo-Konsens und Stammdaten vorsichtig ab …")
     total = len(ticker_list)
+    rate_limited = False
 
     for index, ticker in enumerate(ticker_list):
+        if rate_limited:
+            break
         try:
             data = fetch_yahoo_data(ticker)
             mean_target = data["mean_target"]
@@ -247,12 +250,30 @@ def build_results(ticker_list):
                     "Kurszielquelle": data["source"],
                 })
         except Exception as e:
-            st.warning(f"{ticker}: Yahoo-Daten konnten nicht geladen werden ({e}).")
+            error_text = str(e)
+            if "too many requests" in error_text.lower() or "rate limited" in error_text.lower():
+                rate_limited = True
+                st.error(
+                    f"Yahoo hat den Zugriff begrenzt ({ticker}). Der Suchlauf wird vorsorglich "
+                    "gestoppt, damit keine weiteren Anfragen die Sperre verlängern. Bitte später "
+                    "erneut versuchen; eine längere Wartezeit kann erforderlich sein."
+                )
+            else:
+                st.warning(f"{ticker}: Yahoo-Daten konnten nicht geladen werden ({error_text}).")
 
         progress.progress((index + 1) / total, text=f"Yahoo-Abfrage: {index + 1} von {total}")
-        time.sleep(0.08)
+        # Yahoo ist keine offizielle öffentliche API. Langsamer abrufen, um
+        # unnötige Last und kurzfristige Sperren zu reduzieren.
+        if index + 1 < total and not rate_limited:
+            time.sleep(2.0)
 
     progress.empty()
+    if rate_limited:
+        st.warning(
+            "Der Suchlauf wurde wegen einer Yahoo-Ratenbegrenzung vorzeitig beendet. "
+            "Die angezeigten Treffer enthalten daher nur die bis dahin erfolgreich "
+            "abgerufenen Aktien."
+        )
     return pd.DataFrame(results)
 
 if st.button("🔎 Aktien suchen", type="primary", use_container_width=True):
