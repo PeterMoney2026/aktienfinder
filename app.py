@@ -178,15 +178,21 @@ def build_records():
                 "source": "CSV-Import",
             })
     tickers = [x.strip() for x in tickers_text.replace("\n", ",").split(",") if x.strip()]
-    if tw_key and tickers:
-        progress = st.progress(0, text="Lade Analysten-Kursziele aus TargetWatch …")
-        for i, ticker in enumerate(tickers):
+    nordic_countries = {"Denmark", "Finland", "Iceland", "Norway", "Sweden"}
+    if tw_key and not market_universe.empty:
+        tw_tickers = market_universe[market_universe["country"].isin(nordic_countries)]["ticker"].head(10).tolist()
+    else:
+        tw_tickers = []
+    if tw_key and tw_tickers:
+        st.caption("TargetWatch-Abfrage auf maximal 10 nordische Aktien pro Lauf begrenzt (Free-Tarif: begrenztes Tageskontingent).")
+        progress = st.progress(0, text="Lade nordische Analysten-Kursziele aus TargetWatch …")
+        for i, ticker in enumerate(tw_tickers):
             try:
                 rows, _ = fetch_targetwatch(ticker, tw_key)
                 target_rows.extend(rows)
             except Exception as e:
                 st.warning(f"{ticker}: TargetWatch-Daten nicht abrufbar ({e}).")
-            progress.progress((i + 1) / len(tickers))
+            progress.progress((i + 1) / len(tw_tickers))
             time.sleep(0.15)
         progress.empty()
     return target_rows
