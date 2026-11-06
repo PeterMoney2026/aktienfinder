@@ -110,6 +110,10 @@ def parse_csv(file):
 def fetch_targetwatch(ticker, key):
     url = f"https://www.targetwatch.io/api/v2/stocks/{requests.utils.quote(ticker, safe='')}/targets"
     r = requests.get(url, headers={"Authorization": f"Bearer {key}"}, timeout=20)
+    # TargetWatch deckt nicht jedes nordische Börsenkürzel ab. Ein 404 bedeutet
+    # hier: für diesen Ticker gibt es keinen TargetWatch-Datensatz; überspringen.
+    if r.status_code == 404:
+        return [], None
     r.raise_for_status()
     payload = r.json()
     houses = payload.get("houses") or []
