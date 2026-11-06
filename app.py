@@ -1,9 +1,8 @@
 import io
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pandas as pd
-import requests
 import streamlit as st
 import yfinance as yf
 
@@ -13,44 +12,43 @@ DEFAULTS = {
     "min_upside": 20.0,
     "min_market_cap_musd": 100.0,
     "min_analysts": 3,
-    "max_target_age_days": 90,
 }
 
-st.title("📈 Aktienfinder – Version 3")
-st.caption("Automatisches Aktienuniversum für USA und Europa; Kursziele nur aus überprüfbaren Quellen")
+st.title("📈 Aktienfinder – Version 4")
+st.caption("Internationales Aktienscreening mit Analysten-Kurszielkonsens von Yahoo Finance")
 
 with st.sidebar:
     st.header("Screening-Einstellungen")
-    min_upside = st.number_input("Mindest-Kurspotenzial (%)", min_value=0.0, max_value=500.0,
-                                 value=DEFAULTS["min_upside"], step=1.0)
-    min_cap = st.number_input("Mindest-Marktkapitalisierung (Mio. USD)", min_value=0.0,
-                              value=DEFAULTS["min_market_cap_musd"], step=10.0)
-    min_analysts = st.number_input("Mindestens eindeutige Kurszielgeber", min_value=1, max_value=100,
-                                   value=DEFAULTS["min_analysts"], step=1)
-    max_age = st.number_input("Maximales Alter der Kursziele (Tage)", min_value=1, max_value=730,
-                              value=DEFAULTS["max_target_age_days"], step=1)
-    st.divider()
-    st.subheader("Datenquellen")
-    try:
-        configured_key = st.secrets.get("TARGETWATCH_API_KEY", "")
-    except Exception:
-        configured_key = ""
-    tw_key = configured_key or st.text_input(
-        "TargetWatch API-Key (optional)", type="password",
-        help="Für dauerhafte Nutzung in Streamlit unter App settings → Secrets als TARGETWATCH_API_KEY hinterlegen."
+    min_upside = st.number_input(
+        "Mindest-Kurspotenzial (%)", min_value=0.0, max_value=500.0,
+        value=DEFAULTS["min_upside"], step=1.0
     )
-    if configured_key:
-        st.caption("TargetWatch API-Key wurde sicher aus Streamlit Secrets geladen.")
-    st.caption("Yahoo Finance liefert Kurs und Stammdaten. Analysten-Kursziele werden aus CSV-Einzelbeiträgen übernommen; TargetWatch ist nur für nordische Aktien geeignet.")
+    min_cap = st.number_input(
+        "Mindest-Marktkapitalisierung (Mio. USD)", min_value=0.0,
+        value=DEFAULTS["min_market_cap_musd"], step=10.0
+    )
+    min_analysts = st.number_input(
+        "Mindestens Analysten laut Yahoo", min_value=1, max_value=100,
+        value=DEFAULTS["min_analysts"], step=1
+    )
+    st.divider()
+    st.subheader("Datenquelle")
+    st.write("**Yahoo Finance – Yahoo-Konsens**")
+    st.caption(
+        "Kursziel-Durchschnitt, Median, Hoch/Tief und Analystenanzahl werden – soweit "
+        "von Yahoo verfügbar – übernommen. Kursziel-Daten sind ein aggregierter Konsens, "
+        "keine Liste einzeln überprüfter Analystenbeiträge."
+    )
 
 st.info(
-    "Version 3 lädt ein internationales Aktienuniversum (USA und Europa) automatisch. "
-    "Wichtig: Das Aktienuniversum enthält noch keine Analysten-Kursziele. Diese werden nur aus "
-    "CSV-Einzelbeiträgen übernommen; TargetWatch bleibt auf seine nordische Abdeckung beschränkt. "
-    "Ohne überprüfbare Einzelkursziele, Datum und Kurszielgeber wird kein Potenzial berechnet."
+    "Der Aktienfinder verwendet für Kursziele ausschließlich den klar gekennzeichneten "
+    "**Yahoo-Konsens**. TargetWatch, CSV-Import sowie Scalable-/FactSet-Kurszielquellen "
+    "sind nicht Bestandteil dieser Version. Yahoo veröffentlicht für den Konsens nicht "
+    "zuverlässig ein Datum der letzten Kurszieländerung. Deshalb wird der Abrufzeitpunkt "
+    "angezeigt, aber nicht als Kursziel-Datum ausgegeben."
 )
 
-st.subheader("1. Automatisches Aktienuniversum")
+st.subheader("1. Aktienuniversum")
 UNIVERSE_URL = "https://raw.githubusercontent.com/adanos-software/free-ticker-database/main/data/tickers.csv"
 EUROPE_COUNTRIES = {
     "Austria", "Belgium", "Denmark", "Finland", "France", "Germany", "Ireland",
@@ -60,7 +58,10 @@ EUROPE_COUNTRIES = {
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def load_stock_universe():
-    data = pd.read_csv(UNIVERSE_URL, usecols=["ticker", "name", "exchange", "asset_type", "country", "stock_sector", "isin"])
+    data = pd.read_csv(
+        UNIVERSE_URL,
+        usecols=["ticker", "name", "exchange", "asset_type", "country", "stock_sector", "isin"]
+    )
     data = data[data["asset_type"].astype(str).str.lower().eq("stock")].copy()
     data["ticker"] = data["ticker"].astype(str).str.strip()
     data = data[data["ticker"].ne("") & data["ticker"].ne("nan")]
@@ -74,258 +75,271 @@ try:
     elif market == "Europa":
         market_universe = universe[universe["country"].isin(EUROPE_COUNTRIES)]
     else:
-        market_universe = universe[universe["country"].eq("United States") | universe["country"].isin(EUROPE_COUNTRIES)]
-    st.caption(f"Aktien im geladenen Universum: {len(market_universe):,} · Quelle: Adanos Free Ticker Database (Ticker-/Stammdaten, keine Kursziele)")
-    scan_limit = st.slider("Maximale Anzahl Aktien für den Stammdaten-Testlauf", min_value=10, max_value=500, value=50, step=10)
+        market_universe = universe[
+            universe["country"].eq("United States") | universe["country"].isin(EUROPE_COUNTRIES)
+        ]
+    st.caption(
+        f"Aktien im geladenen Universum: {len(market_universe):,} · "
+        "Quelle: Adanos Free Ticker Database (Ticker-/Stammdaten)"
+    )
+    scan_limit = st.slider(
+        "Maximale Anzahl Aktien pro Suchlauf",
+        min_value=10, max_value=500, value=50, step=10
+    )
     market_universe = market_universe.head(scan_limit)
-    st.dataframe(market_universe[["ticker", "name", "exchange", "country", "stock_sector"]], use_container_width=True, hide_index=True)
-    tickers_text = ", ".join(market_universe["ticker"].tolist())
+    st.dataframe(
+        market_universe[["ticker", "name", "exchange", "country", "stock_sector"]],
+        use_container_width=True, hide_index=True
+    )
+    universe_tickers = market_universe["ticker"].tolist()
 except Exception as e:
-    universe = pd.DataFrame()
-    tickers_text = ""
+    market_universe = pd.DataFrame()
+    universe_tickers = []
     st.error(f"Das automatische Aktienuniversum konnte nicht geladen werden: {e}")
 
-manual_tickers = st.text_input("Optional: zusätzliche Ticker ergänzen (kommagetrennt)", placeholder="z. B. AAPL, SAP.DE")
+manual_tickers = st.text_input(
+    "Optional: zusätzliche Ticker ergänzen (kommagetrennt)",
+    placeholder="z. B. AAPL, SAP.DE"
+)
+tickers = list(universe_tickers)
 if manual_tickers.strip():
-    tickers_text = ", ".join(filter(None, [tickers_text, manual_tickers.replace("\n", ",")]))
-uploaded = st.file_uploader("CSV mit einzelnen Analysten-Kurszielen hochladen", type=["csv"])
+    for item in manual_tickers.replace("\n", ",").split(","):
+        ticker = item.strip()
+        if ticker and ticker not in tickers:
+            tickers.append(ticker)
 
-st.markdown("**Erforderliche CSV-Spalten:** `ticker`, `target_date`, `analyst`, `price_target`, `currency`.")
-st.caption("Jede Zeile muss einen echten, datierten Kurszielbeitrag enthalten. Ein Tickerverzeichnis allein liefert keine Analysten-Kursziele.")
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_yahoo_data(ticker):
+    """Yahoo-Kurs, Stammdaten und aggregierte Analysten-Kursziele abrufen."""
+    stock = yf.Ticker(ticker)
+    info = stock.get_info() or {}
 
-def parse_csv(file):
-    df = pd.read_csv(file)
-    required = {"ticker", "target_date", "analyst", "price_target", "currency"}
-    missing = required - set(df.columns.str.lower())
-    if missing:
-        raise ValueError("Fehlende CSV-Spalten: " + ", ".join(sorted(missing)))
-    df.columns = [c.lower().strip() for c in df.columns]
-    df["target_date"] = pd.to_datetime(df["target_date"], errors="coerce", utc=True)
-    df["price_target"] = pd.to_numeric(df["price_target"], errors="coerce")
-    df["ticker"] = df["ticker"].astype(str).str.strip()
-    df["currency"] = df["currency"].astype(str).str.upper().str.strip()
-    return df.dropna(subset=["target_date", "price_target"])
+    try:
+        fast = stock.fast_info
+        fast_price = fast.get("lastPrice")
+    except Exception:
+        fast_price = None
 
-@st.cache_data(ttl=21600, show_spinner=False)
-def fetch_targetwatch(ticker, key):
-    url = f"https://www.targetwatch.io/api/v2/stocks/{requests.utils.quote(ticker, safe='')}/targets"
-    r = requests.get(url, headers={"Authorization": f"Bearer {key}"}, timeout=20)
-    # TargetWatch deckt nicht jedes nordische Börsenkürzel ab. Ein 404 bedeutet
-    # hier: für diesen Ticker gibt es keinen TargetWatch-Datensatz; überspringen.
-    if r.status_code == 404:
-        return [], None
-    r.raise_for_status()
-    payload = r.json()
-    houses = payload.get("houses") or []
-    rows = []
-    for h in houses:
-        if h.get("priceTarget") is None or not h.get("date"):
-            continue
-        rows.append({
-            "ticker": ticker,
-            "target_date": pd.to_datetime(h["date"], utc=True, errors="coerce"),
-            "analyst": h.get("house") or "Nicht angegeben",
-            "price_target": float(h["priceTarget"]),
-            "currency": payload.get("currency") or "",
-            "company": payload.get("stock"),
-            "country": None,
-            "isin": None,
-            "source": "TargetWatch (Analystenhaus)",
-        })
-    return rows, payload
+    price = (
+        info.get("currentPrice")
+        or info.get("regularMarketPrice")
+        or fast_price
+    )
+    currency = str(info.get("currency") or "").strip()
 
-def fetch_yahoo(ticker):
-    t = yf.Ticker(ticker)
-    info = t.get_info()
-    fast = t.fast_info
-    price = info.get("currentPrice") or info.get("regularMarketPrice") or fast.get("lastPrice")
-    currency = info.get("currency") or ""
-    market_cap = info.get("marketCap")
+    # Die Yahoo-yfinance-Eigenschaft liefert – sofern verfügbar – den Konsens.
+    try:
+        targets = stock.analyst_price_targets or {}
+    except Exception:
+        targets = {}
+
+    def first_number(*values):
+        for value in values:
+            try:
+                if value is not None and pd.notna(value):
+                    number = float(value)
+                    if number > 0:
+                        return number
+            except (TypeError, ValueError):
+                pass
+        return None
+
+    mean_target = first_number(
+        targets.get("mean"), info.get("targetMeanPrice")
+    )
+    median_target = first_number(
+        targets.get("median"), info.get("targetMedianPrice")
+    )
+    low_target = first_number(
+        targets.get("low"), info.get("targetLowPrice")
+    )
+    high_target = first_number(
+        targets.get("high"), info.get("targetHighPrice")
+    )
+    analyst_count = first_number(
+        info.get("numberOfAnalystOpinions"),
+        targets.get("numberOfAnalysts"),
+        targets.get("number_of_analysts"),
+    )
+
+    market_cap = first_number(info.get("marketCap"))
     market_cap_usd = None
     if market_cap is not None and currency:
-        if currency.upper() == "USD":
-            market_cap_usd = float(market_cap)
+        fx_currency = "GBP" if currency.upper() == "GBP" or currency.upper() == "GBp".upper() else currency.upper()
+        if fx_currency == "USD":
+            market_cap_usd = market_cap
         else:
             try:
-                fx_rate = yf.Ticker(f"{currency.upper()}USD=X").fast_info.get("lastPrice")
-                if fx_rate is not None:
-                    market_cap_usd = float(market_cap) * float(fx_rate)
+                fx = yf.Ticker(f"{fx_currency}USD=X").fast_info.get("lastPrice")
+                if fx is not None:
+                    market_cap_usd = market_cap * float(fx)
             except Exception:
                 market_cap_usd = None
+
     return {
         "company": info.get("longName") or info.get("shortName") or ticker,
         "price": float(price) if price is not None else None,
         "currency": currency,
         "market_cap_usd": market_cap_usd,
-        "isin": info.get("isin"),
-        "country": info.get("country"),
-        "sector": info.get("sector"),
-        "quote_time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-        "source": "Yahoo Finance via yfinance",
+        "isin": info.get("isin") or "",
+        "country": info.get("country") or "",
+        "sector": info.get("sector") or "",
+        "mean_target": mean_target,
+        "median_target": median_target,
+        "low_target": low_target,
+        "high_target": high_target,
+        "analyst_count": int(analyst_count) if analyst_count is not None else None,
+        "retrieved_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "source": "Yahoo-Konsens (Yahoo Finance via yfinance)",
     }
 
-def build_records():
-    target_rows = []
-    if uploaded is not None:
-        csv_df = parse_csv(uploaded)
-        for _, row in csv_df.iterrows():
-            target_rows.append({
-                "ticker": row["ticker"],
-                "target_date": row["target_date"],
-                "analyst": row["analyst"],
-                "price_target": row["price_target"],
-                "currency": row["currency"],
-                "company": row.get("company"),
-                "country": row.get("country"),
-                "isin": row.get("isin"),
-                "sector": row.get("sector"),
-                "source": "CSV-Import",
-            })
-    tickers = [x.strip() for x in tickers_text.replace("\n", ",").split(",") if x.strip()]
-    nordic_countries = {"Denmark", "Finland", "Iceland", "Norway", "Sweden"}
-    if tw_key and not market_universe.empty:
-        tw_tickers = market_universe[market_universe["country"].isin(nordic_countries)]["ticker"].head(10).tolist()
-    else:
-        tw_tickers = []
-    if tw_key and tw_tickers:
-        st.caption("TargetWatch-Abfrage auf maximal 10 nordische Aktien pro Lauf begrenzt (Free-Tarif: begrenztes Tageskontingent).")
-        progress = st.progress(0, text="Lade nordische Analysten-Kursziele aus TargetWatch …")
-        for i, ticker in enumerate(tw_tickers):
-            try:
-                rows, _ = fetch_targetwatch(ticker, tw_key)
-                target_rows.extend(rows)
-            except Exception as e:
-                st.warning(f"{ticker}: TargetWatch-Daten nicht abrufbar ({e}).")
-            progress.progress((i + 1) / len(tw_tickers))
-            time.sleep(0.15)
-        progress.empty()
-    return target_rows
-
-def analyze(target_rows):
-    if not target_rows:
-        return pd.DataFrame()
-    raw = pd.DataFrame(target_rows)
+def build_results(ticker_list):
     results = []
-    today = pd.Timestamp.now(tz="UTC")
-    for ticker, group in raw.groupby("ticker"):
-        group = group.dropna(subset=["price_target", "target_date"])
-        if group.empty:
-            continue
-        group = group[group["target_date"] >= today - pd.Timedelta(days=int(max_age))]
-        if group.empty:
-            continue
-        # Unique analyst/house rows only; avoid duplicate rows from the same analyst on the same date.
-        group["analyst"] = group["analyst"].fillna("").astype(str).str.strip()
-        group = group.sort_values("target_date").drop_duplicates(subset=["analyst"], keep="last")
-        n = group["analyst"].nunique()
-        mean_target = group["price_target"].mean()
-        median_target = group["price_target"].median()
-        ccy = group["currency"].dropna()
-        target_ccy = ccy.iloc[-1] if not ccy.empty else ""
+    progress = st.progress(0, text="Rufe Yahoo-Konsens und Stammdaten ab …")
+    total = len(ticker_list)
+
+    for index, ticker in enumerate(ticker_list):
         try:
-            q = fetch_yahoo(ticker)
+            data = fetch_yahoo_data(ticker)
+            mean_target = data["mean_target"]
+            price = data["price"]
+            target_currency = data["currency"]
+            same_currency = bool(
+                mean_target is not None and price is not None and target_currency
+            )
+            upside = (
+                (mean_target / price - 1) * 100
+                if same_currency and price and price > 0
+                else None
+            )
+
+            has_target = mean_target is not None
+            eligible = (
+                has_target
+                and data["analyst_count"] is not None
+                and data["analyst_count"] >= int(min_analysts)
+                and data["market_cap_usd"] is not None
+                and data["market_cap_usd"] >= float(min_cap) * 1_000_000
+                and upside is not None
+                and upside >= float(min_upside)
+            )
+
+            # Nur Aktien mit einem verfügbaren Yahoo-Kurszielkonsens in die Ergebnistabelle aufnehmen.
+            if has_target:
+                results.append({
+                    "Qualifiziert": "Ja" if eligible else "Nein",
+                    "Unternehmen": data["company"],
+                    "Ticker": ticker,
+                    "ISIN": data["isin"],
+                    "Land": data["country"],
+                    "Branche": data["sector"],
+                    "Aktienkurs": price,
+                    "Währung": target_currency,
+                    "Yahoo-Kursziel Ø": mean_target,
+                    "Yahoo-Kursziel Median": data["median_target"],
+                    "Yahoo-Kursziel Tief": data["low_target"],
+                    "Yahoo-Kursziel Hoch": data["high_target"],
+                    "Potenzial %": upside,
+                    "Marktkapitalisierung USD": data["market_cap_usd"],
+                    "Analystenanzahl laut Yahoo": data["analyst_count"],
+                    "Kursziel-Datum": "Von Yahoo nicht ausgewiesen",
+                    "Datenabruf": data["retrieved_at"],
+                    "Kurszielquelle": data["source"],
+                })
         except Exception as e:
-            q = {"company": ticker, "price": None, "currency": target_ccy,
-                 "market_cap_usd": None, "isin": None, "country": None, "sector": None,
-                 "quote_time": None, "source": "Yahoo Finance – nicht verfügbar"}
-            st.warning(f"{ticker}: Yahoo-Stammdaten nicht abrufbar ({e}).")
-        price = q.get("price")
-        # Target and quote must be in same currency; no implicit FX conversion.
-        same_ccy = bool(price is not None and target_ccy and q.get("currency") == target_ccy)
-        upside = ((mean_target / price) - 1) * 100 if same_ccy and price else None
-        target_dates = group["target_date"].dropna()
-        newest = target_dates.max() if not target_dates.empty else pd.NaT
-        age = (today - newest).days if pd.notna(newest) else None
-        eligible = (
-            n >= int(min_analysts)
-            and age is not None and age <= int(max_age)
-            and q.get("market_cap_usd") is not None
-            and q["market_cap_usd"] >= float(min_cap) * 1_000_000
-            and upside is not None and upside >= float(min_upside)
-        )
-        results.append({
-            "Qualifiziert": "Ja" if eligible else "Nein",
-            "Unternehmen": q.get("company") or group.get("company", pd.Series([ticker])).iloc[0] or ticker,
-            "Ticker": ticker,
-            "ISIN": q.get("isin") or (group["isin"].dropna().iloc[0] if "isin" in group and group["isin"].notna().any() else ""),
-            "Land": q.get("country") or (group["country"].dropna().iloc[0] if "country" in group and group["country"].notna().any() else ""),
-            "Branche": q.get("sector") or (group["sector"].dropna().iloc[0] if "sector" in group and group["sector"].notna().any() else ""),
-            "Aktienkurs": price,
-            "Währung": q.get("currency") or target_ccy,
-            "Ø Kursziel": mean_target,
-            "Median Kursziel": median_target,
-            "Potenzial %": upside,
-            "Marktkapitalisierung USD": q.get("market_cap_usd"),
-            "Kurszielgeber / Analystenhäuser": n,
-            "Neuestes Kursziel": newest.strftime("%Y-%m-%d") if pd.notna(newest) else "",
-            "Alter Tage": age,
-            "Kurszielquelle": ", ".join(sorted(set(group.get("source", pd.Series(["CSV-Import"])).dropna()))),
-            "Kursquelle": q.get("source"),
-            "Währung passt": "Ja" if same_ccy else "Nein – prüfen",
-        })
+            st.warning(f"{ticker}: Yahoo-Daten konnten nicht geladen werden ({e}).")
+
+        progress.progress((index + 1) / total, text=f"Yahoo-Abfrage: {index + 1} von {total}")
+        time.sleep(0.08)
+
+    progress.empty()
     return pd.DataFrame(results)
 
 if st.button("🔎 Aktien suchen", type="primary", use_container_width=True):
-    with st.spinner("Analysiere Daten …"):
-        try:
-            rows = build_records()
-            df = analyze(rows)
-            st.session_state["results"] = df
-            st.session_state["run_time"] = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        except Exception as e:
-            st.error(f"Suchlauf fehlgeschlagen: {e}")
+    if not tickers:
+        st.warning("Bitte ein Aktienuniversum auswählen oder zusätzliche Ticker eingeben.")
+    else:
+        with st.spinner("Analysiere Yahoo-Konsensdaten …"):
+            try:
+                st.session_state["results"] = build_results(tickers)
+                st.session_state["run_time"] = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+                st.session_state["scanned_count"] = len(tickers)
+            except Exception as e:
+                st.error(f"Suchlauf fehlgeschlagen: {e}")
 
 if "results" in st.session_state:
     df = st.session_state["results"]
     st.divider()
-    st.subheader("2. Ergebnisse")
-    st.caption(f"Letzter Suchlauf: {st.session_state.get('run_time', '–')}")
+    st.subheader("2. Ergebnisse – Yahoo-Konsens")
+    st.caption(
+        f"Letzter Suchlauf: {st.session_state.get('run_time', '–')} · "
+        f"Aktien abgefragt: {st.session_state.get('scanned_count', 0)}"
+    )
+
     if df.empty:
-        st.warning("Für das ausgewählte Aktienuniversum liegen noch keine auswertbaren Einzelkursziele vor. Das Universum wurde geladen, aber ohne Kursziel-Datum und echte Kurszielgeber wird keine Aktie qualifiziert. Bitte Kursziel-CSV importieren; TargetWatch deckt überwiegend nordische Aktien ab.")
+        st.warning(
+            "Yahoo hat für die abgefragten Aktien keinen auswertbaren Kurszielkonsens geliefert. "
+            "Das bedeutet nicht, dass keine Analysten die Aktien beobachten: Yahoo stellt "
+            "Kursziele nicht für alle Ticker bereit. Versuche einen anderen Markt oder ergänze "
+            "einzelne Ticker."
+        )
     else:
         eligible = df[df["Qualifiziert"] == "Ja"].copy()
         c1, c2, c3 = st.columns(3)
-        c1.metric("Aktien geprüft", len(df))
+        c1.metric("Aktien mit Yahoo-Konsens", len(df))
         c2.metric("Kriterien erfüllt", len(eligible))
-        c3.metric("Ø Potenzial der Treffer", f"{eligible['Potenzial %'].mean():.1f}%" if not eligible.empty else "–")
+        c3.metric(
+            "Ø Potenzial der Treffer",
+            f"{eligible['Potenzial %'].mean():.1f}%" if not eligible.empty else "–"
+        )
+
         f1, f2, f3 = st.columns(3)
         countries = sorted([x for x in df["Land"].dropna().astype(str).unique() if x and x != "None"])
         sectors = sorted([x for x in df["Branche"].dropna().astype(str).unique() if x and x != "None"])
         chosen_countries = f1.multiselect("Länderfilter", countries, default=[])
         chosen_sectors = f2.multiselect("Branchenfilter", sectors, default=[])
-        show_only = f3.checkbox("Nur qualifizierte Aktien", value=True)
+        show_only = f3.checkbox("Nur qualifizierte Aktien", value=False)
+
         view = eligible if show_only else df.copy()
         if chosen_countries:
             view = view[view["Land"].isin(chosen_countries)]
         if chosen_sectors:
             view = view[view["Branche"].isin(chosen_sectors)]
-        sort_by = st.selectbox("Sortieren nach", ["Potenzial %", "Marktkapitalisierung USD", "Kurszielgeber / Analystenhäuser", "Unternehmen"])
+
+        sort_by = st.selectbox(
+            "Sortieren nach",
+            ["Potenzial %", "Marktkapitalisierung USD", "Analystenanzahl laut Yahoo", "Unternehmen"]
+        )
         view = view.sort_values(sort_by, ascending=False, na_position="last")
         st.dataframe(view, use_container_width=True, hide_index=True)
+
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             view.to_excel(writer, index=False, sheet_name="Aktienfinder")
         st.download_button(
             "⬇️ Excel-Datei herunterladen",
             data=output.getvalue(),
-            file_name="aktienfinder_ergebnisse.xlsx",
+            file_name="aktienfinder_yahoo_konsens.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
         with st.expander("Qualitätskontrolle und Hinweise"):
             st.write({
                 "Mindestpotenzial (%)": min_upside,
                 "Mindest-Marktkapitalisierung (USD)": min_cap * 1_000_000,
-                "Mindestanzahl eindeutiger Kurszielgeber": min_analysts,
-                "Maximales Kurszielalter (Tage)": max_age,
-                "Kurszielmethode": "Durchschnitt und Median; Potenzial anhand des Durchschnitts",
+                "Mindestanzahl Analysten laut Yahoo": min_analysts,
+                "Kurszielmethode": "Yahoo-Konsens: Durchschnitt und Median; Potenzial anhand des Durchschnitts",
+                "Kurszielalter": "Von Yahoo nicht zuverlässig ausgewiesen; daher kein Altersfilter",
             })
             st.markdown(
-                "- Analysten-Kursziel-Zahl = Anzahl eindeutiger Analystenhäuser/Analysten aus Einzelkursziel-Datensätzen.\n"
-                "- Fehlt ein aktueller Kurs, eine USD-Marktkapitalisierung oder eine passende Währung, wird die Aktie nicht qualifiziert.\n"
-                "- Marktkapitalisierung wird nach Möglichkeit anhand eines Yahoo-FX-Kurses in USD umgerechnet; fehlt ein FX-Kurs, wird sie nicht als prüfbar gewertet.\n"
-                "- Yahoo Finance/yfinance ist eine inoffizielle Schnittstelle; Verfügbarkeit und Nutzungsbedingungen können sich ändern.\n"
-                "- Die CSV-Ausgabe ist eine Momentaufnahme, keine Anlageempfehlung."
+                "- **Yahoo-Konsens:** aggregierte Anbieterangabe; keine einzeln überprüften Analystenbeiträge.\n"
+                "- **Analystenanzahl laut Yahoo:** von Yahoo gemeldete Anzahl der Analystenmeinungen; keine unabhängig deduplizierte Zahl einzelner Kurszielgeber.\n"
+                "- **Kursziel-Datum:** Yahoo weist das Datum der letzten Änderung des aggregierten Konsenses nicht zuverlässig aus. Der Datenabruf ist deshalb ausdrücklich nur ein Abrufzeitpunkt.\n"
+                "- **Qualifikation:** Eine Aktie wird nur qualifiziert, wenn Kursziel, Analystenanzahl, USD-Marktkapitalisierung und Kurspotenzial die eingestellten Mindestwerte erfüllen.\n"
+                "- **Währung:** Kurs und Kursziel müssen in derselben von Yahoo gemeldeten Währung vorliegen.\n"
+                "- Yahoo Finance/yfinance ist eine inoffizielle Schnittstelle; Verfügbarkeit, Datenumfang und Nutzungsbedingungen können sich ändern.\n"
+                "- Die Ergebnisse sind eine Momentaufnahme und keine Anlageberatung."
             )
 
 st.divider()
-st.caption("Aktienfinder V3 · Daten können verzögert, unvollständig oder fehlerhaft sein. Keine Anlageberatung.")
+st.caption("Aktienfinder V4 · Daten können verzögert, unvollständig oder fehlerhaft sein. Keine Anlageberatung.")
