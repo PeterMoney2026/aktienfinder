@@ -16,8 +16,8 @@ DEFAULTS = {
     "max_target_age_days": 90,
 }
 
-st.title("📈 Aktienfinder – Version 2")
-st.caption("Manuelles Aktien-Screening auf Basis kostenloser Datenquellen")
+st.title("📈 Aktienfinder – Version 3")
+st.caption("Automatisches Aktienuniversum für USA und Europa; Kursziele nur aus überprüfbaren Quellen")
 
 with st.sidebar:
     st.header("Screening-Einstellungen")
@@ -41,28 +41,57 @@ with st.sidebar:
     )
     if configured_key:
         st.caption("TargetWatch API-Key wurde sicher aus Streamlit Secrets geladen.")
-    st.caption("Yahoo Finance wird für Kurs, Marktkapitalisierung und Stammdaten genutzt. Kursziele kommen aus TargetWatch oder einer eigenen CSV-Datei.")
+    st.caption("Yahoo Finance liefert Kurs und Stammdaten. Analysten-Kursziele werden aus CSV-Einzelbeiträgen übernommen; TargetWatch ist nur für nordische Aktien geeignet.")
 
 st.info(
-    "Wichtiger Datenhinweis: Ein weltweit vollständiger, kostenloser Kursziel-Datensatz mit "
-    "Einzelanalysten-Zahlen ist nicht verlässlich frei verfügbar. Version 1 nimmt nur Datensätze "
-    "auf, bei denen Anzahl und Datum der zugrunde liegenden Kursziel-Beiträge nachvollziehbar sind. "
-    "Die TargetWatch-API-Abdeckung ist derzeit begrenzt; für weitere Märkte ist der CSV-Import vorgesehen."
+    "Version 3 lädt ein internationales Aktienuniversum (USA und Europa) automatisch. "
+    "Wichtig: Das Aktienuniversum enthält noch keine Analysten-Kursziele. Diese werden nur aus "
+    "CSV-Einzelbeiträgen übernommen; TargetWatch bleibt auf seine nordische Abdeckung beschränkt. "
+    "Ohne überprüfbare Einzelkursziele, Datum und Kurszielgeber wird kein Potenzial berechnet."
 )
 
-st.subheader("1. Aktienuniversum")
-left, right = st.columns([1, 1])
-with left:
-    tickers_text = st.text_area(
-        "Ticker (kommagetrennt; z. B. AAPL, MSFT, SAP.DE)",
-        placeholder="AAPL, MSFT, SAP.DE, NESN.SW",
-        height=100
-    )
-with right:
-    uploaded = st.file_uploader("Oder CSV mit Aktien/Kurszielen hochladen", type=["csv"])
+st.subheader("1. Automatisches Aktienuniversum")
+UNIVERSE_URL = "https://raw.githubusercontent.com/adanos-software/free-ticker-database/main/data/tickers.csv"
+EUROPE_COUNTRIES = {
+    "Austria", "Belgium", "Denmark", "Finland", "France", "Germany", "Ireland",
+    "Italy", "Netherlands", "Norway", "Poland", "Portugal", "Spain", "Sweden",
+    "Switzerland", "United Kingdom"
+}
 
-st.markdown("**CSV-Spalten für Kursziel-Daten:** `ticker`, `target_date`, `analyst`, `price_target`, `currency`.")
-st.caption("Optional zusätzlich: `isin`, `company`, `country`, `sector`. Jede Zeile entspricht einem Kursziel eines Analysten oder Analystenhauses; die Quelle bestimmt die verfügbare Granularität.")
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_stock_universe():
+    data = pd.read_csv(UNIVERSE_URL, usecols=["ticker", "name", "exchange", "asset_type", "country", "stock_sector", "isin"])
+    data = data[data["asset_type"].astype(str).str.lower().eq("stock")].copy()
+    data["ticker"] = data["ticker"].astype(str).str.strip()
+    data = data[data["ticker"].ne("") & data["ticker"].ne("nan")]
+    return data.drop_duplicates(subset=["ticker"]).reset_index(drop=True)
+
+try:
+    universe = load_stock_universe()
+    market = st.radio("Markt auswählen", ["USA", "Europa", "USA und Europa"], horizontal=True)
+    if market == "USA":
+        market_universe = universe[universe["country"].eq("United States")]
+    elif market == "Europa":
+        market_universe = universe[universe["country"].isin(EUROPE_COUNTRIES)]
+    else:
+        market_universe = universe[universe["country"].eq("United States") | universe["country"].isin(EUROPE_COUNTRIES)]
+    st.caption(f"Aktien im geladenen Universum: {len(market_universe):,} · Quelle: Adanos Free Ticker Database (Ticker-/Stammdaten, keine Kursziele)")
+    scan_limit = st.slider("Maximale Anzahl Aktien für den Stammdaten-Testlauf", min_value=10, max_value=500, value=50, step=10)
+    market_universe = market_universe.head(scan_limit)
+    st.dataframe(market_universe[["ticker", "name", "exchange", "country", "stock_sector"]], use_container_width=True, hide_index=True)
+    tickers_text = ", ".join(market_universe["ticker"].tolist())
+except Exception as e:
+    universe = pd.DataFrame()
+    tickers_text = ""
+    st.error(f"Das automatische Aktienuniversum konnte nicht geladen werden: {e}")
+
+manual_tickers = st.text_input("Optional: zusätzliche Ticker ergänzen (kommagetrennt)", placeholder="z. B. AAPL, SAP.DE")
+if manual_tickers.strip():
+    tickers_text = ", ".join(filter(None, [tickers_text, manual_tickers.replace("\n", ",")]))
+uploaded = st.file_uploader("CSV mit einzelnen Analysten-Kurszielen hochladen", type=["csv"])
+
+st.markdown("**Erforderliche CSV-Spalten:** `ticker`, `target_date`, `analyst`, `price_target`, `currency`.")
+st.caption("Jede Zeile muss einen echten, datierten Kurszielbeitrag enthalten. Ein Tickerverzeichnis allein liefert keine Analysten-Kursziele.")
 
 def parse_csv(file):
     df = pd.read_csv(file)
@@ -242,7 +271,7 @@ if "results" in st.session_state:
     st.subheader("2. Ergebnisse")
     st.caption(f"Letzter Suchlauf: {st.session_state.get('run_time', '–')}")
     if df.empty:
-        st.warning("Keine auswertbaren Kursziel-Datensätze gefunden. Bitte Ticker plus TargetWatch-Key oder eine CSV mit einzelnen Kurszielgebern bereitstellen.")
+        st.warning("Für das ausgewählte Aktienuniversum liegen noch keine auswertbaren Einzelkursziele vor. Das Universum wurde geladen, aber ohne Kursziel-Datum und echte Kurszielgeber wird keine Aktie qualifiziert. Bitte Kursziel-CSV importieren; TargetWatch deckt überwiegend nordische Aktien ab.")
     else:
         eligible = df[df["Qualifiziert"] == "Ja"].copy()
         c1, c2, c3 = st.columns(3)
@@ -289,4 +318,4 @@ if "results" in st.session_state:
             )
 
 st.divider()
-st.caption("Aktienfinder V2 · Daten können verzögert, unvollständig oder fehlerhaft sein. Keine Anlageberatung.")
+st.caption("Aktienfinder V3 · Daten können verzögert, unvollständig oder fehlerhaft sein. Keine Anlageberatung.")
